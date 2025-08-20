@@ -1,0 +1,165 @@
+import { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+
+// グローバル変数の定義
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Firebaseアプリの初期化
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// メインコンポーネント
+const App = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [password, setPassword] = useState('');
+  const [noteContent, setNoteContent] = useState('');
+  const [notes, setNotes] = useState([]);
+  const [userId, setUserId] = useState(null);
+  const [message, setMessage] = useState('');
+  const correctPassword = "John2";
+
+  // コンポーネントがマウントされたときに認証プロセスを開始
+  useEffect(() => {
+    const authenticate = async () => {
+      try {
+        if (initialAuthToken) {
+          await signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Firebase authentication error:", error);
+      }
+    };
+    authenticate();
+  }, []);
+
+  // 認証状態の変更を監視
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsAuthenticated(true);
+        setUserId(user.uid);
+      } else {
+        setIsAuthenticated(false);
+        setUserId(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // ノートをリアルタイムで取得
+  useEffect(() => {
+    if (isAuthenticated && userId) {
+      const notesCollectionPath = `/artifacts/${appId}/public/data/notes`;
+      const q = query(collection(db, notesCollectionPath));
+      
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const fetchedNotes = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        // 日付で降順にソート
+        fetchedNotes.sort((a, b) => b.timestamp - a.timestamp);
+        setNotes(fetchedNotes);
+      }, (error) => {
+        console.error("Error fetching notes:", error);
+      });
+      return () => unsubscribe();
+    }
+  }, [isAuthenticated, userId]);
+
+  // パスワード認証とノートの追加
+  const handleAddNote = async (e) => {
+    e.preventDefault();
+    if (password !== correctPassword) {
+      setMessage('パスワードが間違っています。');
+      return;
+    }
+    if (noteContent.trim() === '') {
+      setMessage('ノートの内容を入力してください。');
+      return;
+    }
+
+    try {
+      const notesCollectionPath = `/artifacts/${appId}/public/data/notes`;
+      await addDoc(collection(db, notesCollectionPath), {
+        content: noteContent,
+        timestamp: Date.now(),
+        // ユーザーIDは公開データなので記録しないが、認証のために必要
+      });
+      setNoteContent('');
+      setPassword('');
+      setMessage('ノートが追加されました！');
+    } catch (e) {
+      console.error("Error adding document: ", e);
+      setMessage('ノートの追加に失敗しました。');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white font-sans p-4 flex flex-col items-center">
+      <div className="w-full max-w-2xl bg-slate-800 p-8 rounded-2xl shadow-xl space-y-8">
+        <h1 className="text-4xl font-bold text-center text-orange-400">
+          みんなの共有ノート 📝
+        </h1>
+        <p className="text-center text-slate-400">
+          パスワードを入力して、新しいノートを追加しましょう。
+        </p>
+
+        <form onSubmit={handleAddNote} className="space-y-4">
+          <input
+            type="password"
+            className="w-full p-3 rounded-xl bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            placeholder="パスワード"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <textarea
+            className="w-full h-32 p-3 rounded-xl bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            placeholder="ノートの内容をここに入力してください"
+            value={noteContent}
+            onChange={(e) => setNoteContent(e.target.value)}
+          ></textarea>
+          <button
+            type="submit"
+            className="w-full p-3 rounded-xl bg-orange-500 text-white font-bold hover:bg-orange-600 transition-colors duration-200 shadow-lg"
+          >
+            ノートを追加
+          </button>
+        </form>
+
+        {message && (
+          <div className="text-center text-sm font-semibold text-orange-400">
+            {message}
+          </div>
+        )}
+
+        <div className="space-y-4 pt-4">
+          <h2 className="text-2xl font-bold text-orange-400">
+            共有ノート一覧
+          </h2>
+          {notes.length === 0 ? (
+            <p className="text-center text-slate-400">まだノートはありません。</p>
+          ) : (
+            notes.map((note) => (
+              <div key={note.id} className="p-4 bg-slate-700 rounded-xl shadow-md">
+                <p className="text-slate-200 whitespace-pre-wrap">{note.content}</p>
+                <div className="text-right text-xs text-slate-500 mt-2">
+                  {new Date(note.timestamp).toLocaleString()}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
